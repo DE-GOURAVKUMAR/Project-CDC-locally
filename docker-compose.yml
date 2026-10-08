@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  # 1. Apache Kafka in KRaft mode (No Zookeeper required)
+  kafka:
+    image: apache/kafka:latest
+    container_name: swiggy_kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093,EXTERNAL://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:29093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk # Hardcoded unique ID for local dev
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    ports:
+      - "9092:9092"
+    networks:
+      - swiggy_net
+
+  # 2. Kafka UI (Replaces the Redpanda Console)
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: swiggy_kafka_ui
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local_swiggy_cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+    depends_on:
+      - kafka
+    networks:
+      - swiggy_net
+
+  # 3. Transactional Database (Unchanged)
+  postgres:
+    image: postgres:15
+    container_name: swiggy_postgres
+    environment:
+      POSTGRES_USER: swiggy_admin
+      POSTGRES_PASSWORD: supersecretpassword
+      POSTGRES_DB: swiggy_db
+    command: ["postgres", "-c", "wal_level=logical"] 
+    ports:
+      - "5432:5432"
+    networks:
+      - swiggy_net
+
+  # 4. Debezium CDC Engine (Pointed to Kafka)
+  debezium:
+    image: quay.io/debezium/connect:2.4
+    container_name: swiggy_debezium
+    environment:
+      BOOTSTRAP_SERVERS: kafka:29092
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: my_connect_configs
+      OFFSET_STORAGE_TOPIC: my_connect_offsets
+      STATUS_STORAGE_TOPIC: my_connect_statuses
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+    ports:
+      - "8083:8083"
+    depends_on:
+      - kafka
+      - postgres
+    networks:
+      - swiggy_net
+
+  pyspark-jupyter:
+    image: jupyter/pyspark-notebook:latest
+    container_name: swiggy_pyspark
+    ports:
+      - "8888:8888" # Jupyter UI
+      - "4040:4040" # Spark UI
+    volumes:
+      - ./notebooks:/home/jovyan/work # Mounts your local code into the container
+    networks:
+      - swiggy_net
+networks:
+  swiggy_net:
+    driver: bridge
